@@ -35,33 +35,39 @@ dependencies:
   get: ^4.6.6
 
   # WebView
-  flutter_inappwebview: ^6.0.0
+  flutter_inappwebview: 6.2.0-beta.3
 
   # Network & API
   dio: ^5.4.0
-  connectivity_plus: ^5.0.2
+  connectivity_plus: ^7.3.1
 
   # Local Storage
   get_storage: ^2.1.1
 
   # Device Info
-  device_info_plus: ^10.1.0
+  device_info_plus: ^13.2.0
 
   # Window Management (Windows)
-  window_manager: ^0.3.9
-  screen_retriever: ^0.1.9
+  window_manager: ^0.5.2
+  screen_retriever: ^0.2.2
 
   # Screenshot
   screenshot: ^3.0.0
   image: ^4.1.7
 
   # Utils
-  intl: ^0.19.0
+  intl: ^0.20.3
   uuid: ^4.4.0
-  permission_handler: ^11.3.1
+  permission_handler: ^13.0.1
 
   # UI
   cupertino_icons: ^1.0.8
+
+  # Environment
+  flutter_dotenv: ^5.2.1
+
+  # WebSocket
+  web_socket_channel: ^2.4.0
 
 dev_dependencies:
   flutter_test:
@@ -86,6 +92,8 @@ flutter:
   uses-material-design: true
 
   # To add assets to your application, add an assets section, like this:
+  assets:
+    - .env
   # assets:
   #   - images/a_dot_burr.jpeg
   #   - images/a_dot_ham.jpeg

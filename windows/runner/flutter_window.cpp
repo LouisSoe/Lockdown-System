@@ -1,8 +1,11 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <iostream>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "lockdown_plugin.h"
+#include "anticheat_plugin.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -25,10 +28,31 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  
+  std::cout << "[FlutterWindow] Registering custom plugins..." << std::endl;
+  
+  // Register custom plugins using PluginRegistrarManager
+  auto* registrar_manager = flutter::PluginRegistrarManager::GetInstance();
+
+  auto* lockdown_registrar = registrar_manager->GetRegistrar<flutter::PluginRegistrarWindows>(
+      flutter_controller_->engine()->GetRegistrarForPlugin("LockdownPlugin"));
+  lockdown_cbt::LockdownPlugin::RegisterWithRegistrar(lockdown_registrar);
+  std::cout << "[FlutterWindow] LockdownPlugin registered" << std::endl;
+  
+  auto* anticheat_registrar = registrar_manager->GetRegistrar<flutter::PluginRegistrarWindows>(
+      flutter_controller_->engine()->GetRegistrarForPlugin("AntiCheatPlugin"));
+  lockdown_cbt::AntiCheatPlugin::RegisterWithRegistrar(anticheat_registrar);
+  std::cout << "[FlutterWindow] AntiCheatPlugin registered" << std::endl;
+  
+  std::cout << "[FlutterWindow] Both plugins registered successfully" << std::endl;
+  
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
+  // Show the window
+  this->Show();
+
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
+    // Window is already shown, ensure focus
   });
 
   // Flutter can complete the first frame before the "show window" callback is

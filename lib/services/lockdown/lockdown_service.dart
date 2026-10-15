@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:window_manager/window_manager.dart';
 
 class LockdownService extends GetxService {
   static const MethodChannel _channel = MethodChannel('lockdown_channel');
@@ -41,25 +43,40 @@ class LockdownService extends GetxService {
   
   // Disable full lockdown
   Future<void> disableLockdown() async {
-    try {
-      await disableKioskMode();
-      await enableClipboard();
-      await unblockContextMenu();
-      await enableWindowControls();
-      await unblockShortcuts();
-      await disableFullscreen();
-      
-      isLocked.value = false;
+    final errors = <String>[];
+
+    Future<void> tryStep(String name, Future<void> Function() fn) async {
+      try {
+        await fn();
+      } catch (e) {
+        errors.add('$name: $e');
+        print('✗ Unlock step "$name" error: $e');
+      }
+    }
+
+    await tryStep('disableFullscreen', disableFullscreen);
+    await tryStep('unblockShortcuts', unblockShortcuts);
+    await tryStep('enableWindowControls', enableWindowControls);
+    await tryStep('unblockContextMenu', unblockContextMenu);
+    await tryStep('enableClipboard', enableClipboard);
+    await tryStep('disableKioskMode', disableKioskMode);
+
+    isLocked.value = false;
+
+    if (errors.isEmpty) {
       print('✓ Lockdown disabled successfully');
-    } catch (e) {
-      print('✗ Unlock error: $e');
-      rethrow;
+    } else {
+      print('⚠ Lockdown disabled with errors: $errors');
     }
   }
   
   // Individual lockdown features
   Future<void> enableFullscreen() async {
     try {
+      if (Platform.isWindows) {
+        await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+        await windowManager.setFullScreen(true);
+      }
       await _channel.invokeMethod('enableFullscreen');
       lockdownStatus['fullscreen'] = true;
       print('✓ Fullscreen enabled');
@@ -70,6 +87,10 @@ class LockdownService extends GetxService {
   
   Future<void> disableFullscreen() async {
     try {
+      if (Platform.isWindows) {
+        await windowManager.setFullScreen(false);
+        await windowManager.setTitleBarStyle(TitleBarStyle.normal);
+      }
       await _channel.invokeMethod('disableFullscreen');
       lockdownStatus['fullscreen'] = false;
       print('✓ Fullscreen disabled');
@@ -177,7 +198,25 @@ class LockdownService extends GetxService {
       print('✗ Disable kiosk mode error: $e');
     }
   }
-  
+
+  Future<void> pinToAllVirtualDesktops() async {
+    try {
+      await _channel.invokeMethod('pinToAllVirtualDesktops');
+      print('✓ Pinned to all virtual desktops');
+    } catch (e) {
+      print('✗ Pin to all virtual desktops error: $e');
+    }
+  }
+
+  Future<void> unpinFromVirtualDesktops() async {
+    try {
+      await _channel.invokeMethod('unpinFromVirtualDesktops');
+      print('✓ Unpinned from virtual desktops');
+    } catch (e) {
+      print('✗ Unpin from virtual desktops error: $e');
+    }
+  }
+
   // Query lockdown status
   Future<Map<String, bool>> getLockdownStatus() async {
     return lockdownStatus;

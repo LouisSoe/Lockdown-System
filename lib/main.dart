@@ -1,37 +1,56 @@
-import 'dart:io';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 import 'app/routes/app_pages.dart';
 import 'app/routes/app_routes.dart';
 import 'app/themes/app_theme.dart';
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  
-  // Initialize GetStorage
-  await GetStorage.init();
-  
-  // Initialize window manager for Windows
-  if (Platform.isWindows) {
-    await windowManager.ensureInitialized();
-    
-    WindowOptions windowOptions = const WindowOptions(
-      size: Size(1280, 720),
-      center: true,
-      backgroundColor: Colors.transparent,
-      skipTaskbar: false,
-      titleBarStyle: TitleBarStyle.normal,
-    );
-    
-    windowManager.waitUntilReadyToShow(windowOptions, () async {
-      await windowManager.show();
-      await windowManager.focus();
-    });
+  try {
+    WidgetsFlutterBinding.ensureInitialized();
+
+    print('Starting Lockdown CBT application...');
+
+    // Load environment variables
+    await dotenv.load(fileName: '.env');
+    print('Environment variables loaded');
+
+    // Initialize GetStorage
+    await GetStorage.init();
+    print('GetStorage initialized');
+
+    // Initialize window_manager only on desktop platforms (Windows, macOS, Linux)
+    if (!kIsWeb &&
+        (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
+      await windowManager.ensureInitialized();
+
+      const WindowOptions windowOptions = WindowOptions(
+        size: Size(1280, 800),
+        minimumSize: Size(800, 600),
+        center: true,
+        title: 'Lockdown CBT',
+        skipTaskbar: false,
+      );
+
+      await windowManager.waitUntilReadyToShow(windowOptions, () async {
+        await windowManager.show();
+        await windowManager.focus();
+      });
+    }
+
+    print('Launching app...');
+    runApp(const LockdownApp());
+  } catch (e, stackTrace) {
+    print('ERROR during initialization: $e');
+    print('Stack trace: $stackTrace');
+    rethrow;
   }
-  
-  runApp(const LockdownApp());
 }
 
 class LockdownApp extends StatelessWidget {
@@ -45,7 +64,7 @@ class LockdownApp extends StatelessWidget {
       initialRoute: AppRoutes.SPLASH,
       getPages: AppPages.pages,
       debugShowCheckedModeBanner: false,
-      defaultTransition: Transition.fadeIn,
+      defaultTransition: Transition.noTransition,
     );
   }
 }

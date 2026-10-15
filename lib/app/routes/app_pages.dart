@@ -9,6 +9,8 @@ import 'package:lockdown_engine/services/webview/webview_service.dart';
 import 'package:lockdown_engine/services/webview/javascript_bridge_service.dart';
 import 'package:lockdown_engine/services/lockdown/lockdown_service.dart';
 import 'package:lockdown_engine/services/anticheat/anticheat_service.dart';
+import 'package:lockdown_engine/services/screen_share/frame_capture_service.dart';
+import 'package:lockdown_engine/services/screen_share/screen_share_service.dart';
 import 'app_routes.dart';
 
 class AppPages {
@@ -42,20 +44,24 @@ class SplashBinding extends Bindings {
 class SetupBinding extends Bindings {
   @override
   void dependencies() {
-    Get.lazyPut(() => SetupController());
+    Get.lazyPut<SetupController>(() => SetupController(), fenix: true);
   }
 }
 
 class ExamBinding extends Bindings {
   @override
   void dependencies() {
-    // Initialize all services needed for exam
+    // Core services
     Get.put(WebViewService());
     Get.put(JavaScriptBridgeService());
     Get.put(LockdownService());
     Get.put(AntiCheatService());
-    
-    // Initialize exam controller
+
+    // Screen share services
+    Get.put(FrameCaptureService());
+    Get.put(ScreenShareService());
+
+    // Exam controller
     Get.lazyPut(() => ExamController());
   }
 }

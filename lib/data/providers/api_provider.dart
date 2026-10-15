@@ -3,7 +3,7 @@ import 'package:lockdown_engine/core/config/app_config.dart';
 
 class ApiProvider {
   late Dio _dio;
-  
+
   ApiProvider() {
     _dio = Dio(BaseOptions(
       baseUrl: AppConfig.baseUrl,
@@ -14,7 +14,7 @@ class ApiProvider {
         'Content-Type': 'application/json',
       },
     ));
-    
+
     // Add interceptors for logging
     _dio.interceptors.add(LogInterceptor(
       requestBody: true,
@@ -22,13 +22,12 @@ class ApiProvider {
       error: true,
     ));
   }
-  
-  // Update base URL dynamically
+
+  // Update base URL dynamically (runtime override, misal dari setup screen)
   void updateBaseUrl(String newBaseUrl) {
     _dio.options.baseUrl = newBaseUrl;
-    AppConfig.setBaseUrl(newBaseUrl);
   }
-  
+
   Future<Response> get(String path, {Map<String, dynamic>? params}) async {
     try {
       return await _dio.get(path, queryParameters: params);
@@ -36,7 +35,7 @@ class ApiProvider {
       throw _handleError(e);
     }
   }
-  
+
   Future<Response> post(String path, {dynamic data}) async {
     try {
       return await _dio.post(path, data: data);
@@ -44,7 +43,7 @@ class ApiProvider {
       throw _handleError(e);
     }
   }
-  
+
   Future<Response> put(String path, {dynamic data}) async {
     try {
       return await _dio.put(path, data: data);
@@ -52,7 +51,7 @@ class ApiProvider {
       throw _handleError(e);
     }
   }
-  
+
   Future<Response> delete(String path, {dynamic data}) async {
     try {
       return await _dio.delete(path, data: data);
@@ -60,7 +59,7 @@ class ApiProvider {
       throw _handleError(e);
     }
   }
-  
+
   Exception _handleError(DioException error) {
     switch (error.type) {
       case DioExceptionType.connectionTimeout:
@@ -68,7 +67,15 @@ class ApiProvider {
       case DioExceptionType.receiveTimeout:
         return Exception('Connection timeout. Please check your internet connection.');
       case DioExceptionType.badResponse:
-        return Exception('Server error: ${error.response?.statusCode}');
+        final status = error.response?.statusCode;
+        final data = error.response?.data;
+        // Re-throw dengan response agar caller bisa parse body (misal 422)
+        return DioException(
+          requestOptions: error.requestOptions,
+          response: error.response,
+          type: error.type,
+          error: 'Server error: $status — $data',
+        );
       case DioExceptionType.cancel:
         return Exception('Request cancelled');
       default:
@@ -76,3 +83,4 @@ class ApiProvider {
     }
   }
 }
+

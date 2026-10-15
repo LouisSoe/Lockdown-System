@@ -1,6 +1,6 @@
+import 'dart:io' show Platform;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:get/get.dart';
-import 'package:lockdown_engine/core/constants/event_types.dart';
 
 class WebViewService extends GetxService {
   late InAppWebViewController webViewController;
@@ -10,58 +10,84 @@ class WebViewService extends GetxService {
   final canGoForward = false.obs;
   final currentUrl = ''.obs;
   final loadProgress = 0.0.obs;
+  final hasLoadError = false.obs;
+  final lastErrorCode = 0.obs;
+  final lastErrorMessage = ''.obs;
+
+  /// User-Agent standar Chrome agar Google OAuth tidak memblokir login dengan error "Browser tidak didukung"
+  static String getDefaultUserAgent() {
+    try {
+      if (Platform.isAndroid) {
+        return 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36';
+      } else if (Platform.isWindows) {
+        return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+      } else if (Platform.isIOS) {
+        return 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+      }
+    } catch (_) {}
+    return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+  }
   
   // WebView settings
   InAppWebViewSettings getSettings() {
     return InAppWebViewSettings(
       // JavaScript
       javaScriptEnabled: true,
-      javaScriptCanOpenWindowsAutomatically: false,
-      
+      javaScriptCanOpenWindowsAutomatically: true,
+      supportMultipleWindows: false,
+
+      // Storage & Cookies untuk Google Login / SSO
+      domStorageEnabled: true,
+      databaseEnabled: true,
+      thirdPartyCookiesEnabled: true,
+      sharedCookiesEnabled: true,
+
       // Media
       mediaPlaybackRequiresUserGesture: false,
       allowsInlineMediaPlayback: true,
-      
+
       // Security
       allowFileAccess: false,
       allowContentAccess: false,
       allowUniversalAccessFromFileURLs: false,
       allowFileAccessFromFileURLs: false,
-      
+
       // Zoom
       supportZoom: false,
       builtInZoomControls: false,
       displayZoomControls: false,
-      
+
       // Cache
       cacheEnabled: true,
-      clearCache: false,
-      
-      // DevTools - disabled in production
-      debuggingEnabled: false,
-      
+
       // Downloads
       useOnDownloadStart: true,
-      
+
+      // Context menu — blokir klik kanan (desktop) dan long press (mobile)
+      disableContextMenu: true,
+      disableLongPressContextMenuOnLinks: true,
+
       // Display
       transparentBackground: false,
       verticalScrollBarEnabled: true,
       horizontalScrollBarEnabled: true,
-      
+
       // Hardware acceleration
       hardwareAcceleration: true,
-      
+
       // Mixed content (allow HTTPS to load HTTP resources if needed)
       mixedContentMode: MixedContentMode.MIXED_CONTENT_COMPATIBILITY_MODE,
-      
-      // User agent (optional - can be customized)
-      userAgent: 'LockdownCBT/1.0',
+
+      // User agent — standard Chrome browser agar diterima Google OAuth
+      userAgent: getDefaultUserAgent(),
     );
   }
   
   // Load start handler
   void handleLoadStart(InAppWebViewController controller, WebUri? url) {
     isLoading.value = true;
+    hasLoadError.value = false;
+    lastErrorMessage.value = '';
     currentUrl.value = url?.toString() ?? '';
     loadProgress.value = 0.0;
   }
@@ -82,12 +108,15 @@ class WebViewService extends GetxService {
   // Load error handler
   void handleLoadError(
     InAppWebViewController controller,
-    WebUri? url,
+    Uri? url,
     int code,
     String message,
   ) {
+    isLoading.value = false;
+    hasLoadError.value = true;
+    lastErrorCode.value = code;
+    lastErrorMessage.value = message;
     print('WebView Load Error: $code - $message');
-    // Security logger will be integrated later
   }
   
   // Navigation handler
@@ -117,18 +146,20 @@ class WebViewService extends GetxService {
     );
   }
   
-  // Create window handler (popups)
+  // Create window handler (popups / SSO Google Login)
   bool handleCreateWindow(CreateWindowAction createWindowAction) {
-    final url = createWindowAction.request.url?.toString();
-    print('Popup blocked: $url');
-    
-    Get.snackbar(
-      'Popup Blocked',
-      'Popups are not allowed during exam',
-      snackPosition: SnackPosition.TOP,
-    );
-    
-    return false; // Don't create new window
+    final request = createWindowAction.request;
+    final url = request.url?.toString() ?? '';
+    print('Create window request: $url');
+
+    // Jika window.open dipanggil (misal popup OAuth Google/SSO),
+    // muat URL tersebut langsung di WebView yang sama agar login berjalan mulus
+    if (request.url != null) {
+      webViewController.loadUrl(urlRequest: request);
+      return false; // Return false agar WebView tidak mengharapkan windowId terpisah
+    }
+
+    return false;
   }
   
   // Update navigation state
@@ -151,6 +182,8 @@ class WebViewService extends GetxService {
   }
   
   Future<void> reload() async {
+    hasLoadError.value = false;
+    lastErrorMessage.value = '';
     await webViewController.reload();
   }
   
@@ -185,13 +218,22 @@ class WebViewService extends GetxService {
   
   // Console message handler
   void handleConsoleMessage(ConsoleMessage consoleMessage) {
-    print('WebView Console [${consoleMessage.messageLevel.name}]: ${consoleMessage.message}');
+    print('WebView Console [${consoleMessage.messageLevel.toString()}]: ${consoleMessage.message}');
   }
   
+  // Cleanup WebView safely before unmount
+  Future<void> disposeWebView() async {
+    try {
+      await webViewController.stopLoading();
+    } catch (_) {
+      // Controller might already be disposed or unattached
+    }
+  }
+
   // Cleanup
   @override
   void onClose() {
-    // Clean up resources if needed
+    disposeWebView();
     super.onClose();
   }
 }

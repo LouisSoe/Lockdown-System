@@ -2,13 +2,18 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:lockdown_engine/kiosk/kiosk_controller.dart';
 
 class LockdownService extends GetxService {
   static const MethodChannel _channel = MethodChannel('lockdown_channel');
   
+  final kioskController = KioskController();
   final isLocked = false.obs;
   final lockdownStatus = <String, bool>{}.obs;
   
+  // Callback saat terjadi pelanggaran keamanan dari native Android (status bar / home / exit)
+  void Function(String reason)? onSecurityViolation;
+
   // Initialize lockdown status
   @override
   void onInit() {
@@ -21,24 +26,65 @@ class LockdownService extends GetxService {
       'clipboard_disabled': false,
       'kiosk_mode': false,
     };
+
+    // Handler pesan masuk dari native Android (Kotlin)
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'onSecurityViolation') {
+        String reason = 'native_violation';
+        if (call.arguments is Map) {
+          reason = (call.arguments as Map)['reason']?.toString() ?? 'native_violation';
+        }
+        print('⚠ Native Security Violation Triggered: $reason');
+        onSecurityViolation?.call(reason);
+      }
+    });
   }
   
   // Enable full lockdown
-  Future<void> enableLockdown() async {
-    try {
-      await enableFullscreen();
-      await blockShortcuts();
-      await disableWindowControls();
-      await blockContextMenu();
-      await disableClipboard();
-      await enableKioskMode();
-      
-      isLocked.value = true;
-      print('✓ Lockdown enabled successfully');
-    } catch (e) {
-      print('✗ Lockdown error: $e');
-      rethrow;
+  Future<void> enableLockdown({
+    String? apiBase,
+    String? token,
+    String? examId,
+    String? studentId,
+    int? maxViolations,
+    bool? hasViolationLimit,
+    List<String> allowedPackages = const [],
+  }) async {
+    final errors = <String>[];
+
+    Future<void> tryStep(String name, Future<void> Function() fn) async {
+      try {
+        await fn();
+      } catch (e) {
+        errors.add('$name: $e');
+        print('✗ Lock step "$name" error: $e');
+      }
     }
+
+    if (Platform.isAndroid) {
+      await tryStep('kioskStart', () => kioskController.start(
+        apiBase: apiBase ?? '',
+        token: token ?? '',
+        examId: examId ?? '',
+        studentId: studentId ?? '',
+        maxViolations: maxViolations,
+        hasViolationLimit: hasViolationLimit,
+        allowedPackages: allowedPackages,
+      ));
+    }
+
+    await tryStep('enableFullscreen', enableFullscreen);
+    await tryStep('setLockState', () => setLockState(true));
+    await tryStep('blockShortcuts', blockShortcuts);
+    await tryStep('disableWindowControls', disableWindowControls);
+    await tryStep('blockContextMenu', blockContextMenu);
+    await tryStep('disableClipboard', disableClipboard);
+    await tryStep('enableKioskMode', enableKioskMode);
+    await tryStep('blockNotifications', blockNotifications);
+    await tryStep('addTopOverlay', addTopOverlay);
+
+    isLocked.value = true;
+    print('✓ Lockdown enabled successfully (errors: $errors)');
   }
   
   // Disable full lockdown
@@ -54,12 +100,19 @@ class LockdownService extends GetxService {
       }
     }
 
+    if (Platform.isAndroid) {
+      await tryStep('kioskStop', kioskController.stop);
+    }
+
+    await tryStep('removeTopOverlay', removeTopOverlay);         // Lepas lapisan transparan
+    await tryStep('setLockState', () => setLockState(false));
     await tryStep('disableFullscreen', disableFullscreen);
     await tryStep('unblockShortcuts', unblockShortcuts);
     await tryStep('enableWindowControls', enableWindowControls);
     await tryStep('unblockContextMenu', unblockContextMenu);
     await tryStep('enableClipboard', enableClipboard);
     await tryStep('disableKioskMode', disableKioskMode);
+    await tryStep('unblockNotifications', unblockNotifications);  // Kembalikan notifikasi
 
     isLocked.value = false;
 
@@ -199,6 +252,129 @@ class LockdownService extends GetxService {
     }
   }
 
+  // ---------------------------------------------------------------
+  // Notification Blocking
+  // ---------------------------------------------------------------
+
+  /// Blokir semua notifikasi (DND: INTERRUPTION_FILTER_NONE).
+  /// Hanya berjalan jika izin ACCESS_NOTIFICATION_POLICY sudah diberikan.
+  Future<void> blockNotifications() async {
+    try {
+      if (Platform.isAndroid) {
+        await _channel.invokeMethod('blockNotifications');
+        lockdownStatus['notifications_blocked'] = true;
+        print('✓ Notifications blocked');
+      }
+    } catch (e) {
+      print('✗ Block notifications error: $e');
+    }
+  }
+
+  /// Kembalikan filter notifikasi ke kondisi sebelum ujian.
+  Future<void> unblockNotifications() async {
+    try {
+      if (Platform.isAndroid) {
+        await _channel.invokeMethod('unblockNotifications');
+        lockdownStatus['notifications_blocked'] = false;
+        print('✓ Notifications unblocked');
+      }
+    } catch (e) {
+      print('✗ Unblock notifications error: $e');
+    }
+  }
+
+  /// Cek apakah izin Notification Policy sudah diberikan oleh user.
+  /// Kembalikan true jika sudah, false jika belum (perlu buka pengaturan).
+  Future<bool> isNotificationPolicyGranted() async {
+    try {
+      if (Platform.isAndroid) {
+        final result = await _channel.invokeMethod<bool>('isNotificationPolicyGranted');
+        return result ?? false;
+      }
+      return true; // Platform lain tidak perlu
+    } catch (e) {
+      print('✗ Check notification policy error: $e');
+      return false;
+    }
+  }
+
+  /// Buka halaman pengaturan izin DND/Notification Policy di Settings Android.
+  Future<void> openNotificationPolicySettings() async {
+    try {
+      if (Platform.isAndroid) {
+        await _channel.invokeMethod('openNotificationPolicySettings');
+      }
+    } catch (e) {
+      print('✗ Open notification policy settings error: $e');
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Transparent Touch Overlay (Penelan Swipe Status Bar)
+  // ---------------------------------------------------------------
+
+  /// Pasang lapisan sentuh transparan di atas layar
+  Future<void> addTopOverlay() async {
+    try {
+      if (Platform.isAndroid) {
+        await _channel.invokeMethod('addTopOverlay');
+        lockdownStatus['top_overlay'] = true;
+        print('✓ Top overlay enabled');
+      }
+    } catch (e) {
+      print('✗ Add top overlay error: $e');
+    }
+  }
+
+  /// Lepas lapisan sentuh transparan
+  Future<void> removeTopOverlay() async {
+    try {
+      if (Platform.isAndroid) {
+        await _channel.invokeMethod('removeTopOverlay');
+        lockdownStatus['top_overlay'] = false;
+        print('✓ Top overlay removed');
+      }
+    } catch (e) {
+      print('✗ Remove top overlay error: $e');
+    }
+  }
+
+  /// Cek apakah izin "Tampilkan di atas aplikasi lain" sudah diberikan
+  Future<bool> isOverlayPermissionGranted() async {
+    try {
+      if (Platform.isAndroid) {
+        final result = await _channel.invokeMethod<bool>('isOverlayPermissionGranted');
+        return result ?? false;
+      }
+      return true;
+    } catch (e) {
+      print('✗ Check overlay permission error: $e');
+      return false;
+    }
+  }
+
+  /// Buka halaman pengaturan izin "Tampilkan di atas aplikasi lain"
+  Future<void> openOverlaySettings() async {
+    try {
+      if (Platform.isAndroid) {
+        await _channel.invokeMethod('openOverlaySettings');
+      }
+    } catch (e) {
+      print('✗ Open overlay settings error: $e');
+    }
+  }
+
+  /// Sinkronisasi status aktif lockdown ke native Android
+  Future<void> setLockState(bool locked) async {
+    try {
+      if (Platform.isAndroid) {
+        await _channel.invokeMethod('setLockState', {'locked': locked});
+      }
+    } catch (e) {
+      print('✗ Set lock state error: $e');
+    }
+  }
+
   Future<void> pinToAllVirtualDesktops() async {
     try {
       await _channel.invokeMethod('pinToAllVirtualDesktops');
@@ -229,5 +405,11 @@ class LockdownService extends GetxService {
       return false;
     }
     return true;
+  }
+
+  @override
+  void onClose() {
+    kioskController.dispose();
+    super.onClose();
   }
 }

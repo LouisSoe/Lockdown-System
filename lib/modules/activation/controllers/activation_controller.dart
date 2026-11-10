@@ -18,6 +18,8 @@ class ActivationController extends GetxController {
   static const String _keyExamName = 'exam_name';
   static const String _keyRedirectUrl = 'redirect_url';
   static const String _keySessionId = 'activation_session_id';
+  static const String _keyMaxViolations = 'activation_max_violations';
+  static const String _keyHasViolationLimit = 'activation_has_violation_limit';
 
   @override
   void onInit() {
@@ -78,6 +80,16 @@ class ActivationController extends GetxController {
     }
   }
 
+  /// Ambil batas pelanggaran maksimal dari storage (null jika guru menonaktifkan batasan).
+  static int? getMaxViolations() {
+    return GetStorage().read<int>(_keyMaxViolations);
+  }
+
+  /// Cek apakah pembatasan pelanggaran aktif (true: aktif, false: dinonaktifkan guru).
+  static bool getHasViolationLimit() {
+    return GetStorage().read<bool>(_keyHasViolationLimit) ?? true;
+  }
+
   Future<void> verify({VoidCallback? onSuccess}) async {
     final studentName = studentNameController.text.trim();
     final token = tokenController.text.trim();
@@ -112,6 +124,8 @@ class ActivationController extends GetxController {
         if (result.sessionId != null) {
           await _storage.write(_keySessionId, result.sessionId);
         }
+        await _storage.write(_keyMaxViolations, result.maxViolations);
+        await _storage.write(_keyHasViolationLimit, result.hasViolationLimit);
 
         Get.back(); // tutup dialog
         onSuccess?.call();
@@ -136,6 +150,8 @@ class ActivationController extends GetxController {
     await storage.remove(_keyExamName);
     await storage.remove(_keyRedirectUrl);
     await storage.remove(_keySessionId);
+    await storage.remove(_keyMaxViolations);
+    await storage.remove(_keyHasViolationLimit);
   }
 
   /// Hapus hanya session ID saat sesi selesai, tanpa menghapus nama & token

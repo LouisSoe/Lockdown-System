@@ -10,6 +10,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'app/routes/app_pages.dart';
 import 'app/routes/app_routes.dart';
 import 'app/themes/app_theme.dart';
+import 'services/lockdown/lockdown_service.dart';
 
 void main() async {
   try {
@@ -24,6 +25,9 @@ void main() async {
     // Initialize GetStorage
     await GetStorage.init();
     print('GetStorage initialized');
+
+    // Initialize LockdownService permanently for app lifecycle
+    Get.put(LockdownService(), permanent: true);
 
     // Initialize window_manager only on desktop platforms (Windows, macOS, Linux)
     if (!kIsWeb &&

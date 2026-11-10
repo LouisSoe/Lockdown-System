@@ -9,8 +9,7 @@ import 'package:lockdown_engine/services/webview/webview_service.dart';
 import 'package:lockdown_engine/services/webview/javascript_bridge_service.dart';
 import 'package:lockdown_engine/services/lockdown/lockdown_service.dart';
 import 'package:lockdown_engine/services/anticheat/anticheat_service.dart';
-import 'package:lockdown_engine/services/screen_share/frame_capture_service.dart';
-import 'package:lockdown_engine/services/screen_share/screen_share_service.dart';
+import 'package:lockdown_engine/modules/setup/views/preflight_view.dart';
 import 'app_routes.dart';
 
 class AppPages {
@@ -24,6 +23,10 @@ class AppPages {
       name: AppRoutes.SETUP_URL,
       page: () => const SetupUrlView(),
       binding: SetupBinding(),
+    ),
+    GetPage(
+      name: AppRoutes.PREFLIGHT,
+      page: () => const PreflightView(),
     ),
     GetPage(
       name: AppRoutes.EXAM,
@@ -54,12 +57,10 @@ class ExamBinding extends Bindings {
     // Core services
     Get.put(WebViewService());
     Get.put(JavaScriptBridgeService());
-    Get.put(LockdownService());
+    if (!Get.isRegistered<LockdownService>()) {
+      Get.put(LockdownService(), permanent: true);
+    }
     Get.put(AntiCheatService());
-
-    // Screen share services
-    Get.put(FrameCaptureService());
-    Get.put(ScreenShareService());
 
     // Exam controller
     Get.lazyPut(() => ExamController());

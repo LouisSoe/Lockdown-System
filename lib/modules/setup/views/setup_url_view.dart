@@ -1,19 +1,28 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:lockdown_engine/app/routes/app_routes.dart';
+import 'package:lockdown_engine/core/utils/uppercase_text_formatter.dart';
 import 'package:lockdown_engine/modules/setup/controllers/setup_controller.dart';
 import 'package:lockdown_engine/modules/exam/views/wifi_dialog.dart';
 
 class SetupUrlView extends GetView<SetupController> {
-  const SetupUrlView({Key? key}) : super(key: key);
+  const SetupUrlView({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Lockdown CBT'),
+        title: GestureDetector(
+          onLongPress: () => controller.openAdminMenu(),
+          child: const Text('Lockdown CBT'),
+        ),
         centerTitle: false,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.checklist_rounded),
+            tooltip: 'Kesiapan Perangkat (Preflight)',
+            onPressed: () => Get.toNamed(AppRoutes.PREFLIGHT),
+          ),
           IconButton(
             icon: const Icon(Icons.wifi),
             tooltip: 'Ganti Wi-Fi / Cek Jaringan',
@@ -23,6 +32,7 @@ class SetupUrlView extends GetView<SetupController> {
       ),
       body: SafeArea(
         child: SingleChildScrollView(
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -31,17 +41,20 @@ class SetupUrlView extends GetView<SetupController> {
               Center(
                 child: Column(
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade50,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.blue.shade200, width: 2),
-                      ),
-                      child: Icon(
-                        Icons.shield_rounded,
-                        size: 48,
-                        color: Colors.blue.shade700,
+                    GestureDetector(
+                      onTap: () => controller.onShieldTapped(),
+                      child: Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.blue.shade200, width: 2),
+                        ),
+                        child: Icon(
+                          Icons.shield_rounded,
+                          size: 48,
+                          color: Colors.blue.shade700,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 14),
@@ -72,37 +85,46 @@ class SetupUrlView extends GetView<SetupController> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                     // Input Nama Siswa
-                    TextField(
-                      controller: controller.studentNameController,
-                      enabled: !controller.isLoading.value,
-                      textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(
-                        labelText: 'Nama Lengkap Siswa',
-                        hintText: 'Contoh: Ahmad Fauzi',
-                        prefixIcon: Icon(Icons.person_outline),
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
+                    Obx(() => TextField(
+                          controller: controller.studentNameController,
+                          enabled: !controller.isLoading.value,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          textCapitalization: TextCapitalization.words,
+                          keyboardType: TextInputType.name,
+                          textInputAction: TextInputAction.next,
+                          scrollPadding: const EdgeInsets.only(bottom: 120.0, top: 20.0),
+                          decoration: const InputDecoration(
+                            labelText: 'Nama Lengkap Siswa',
+                            hintText: 'Contoh: Ahmad Fauzi',
+                            prefixIcon: Icon(Icons.person_outline),
+                            border: OutlineInputBorder(),
+                          ),
+                        )),
 
                     const SizedBox(height: 16),
 
                     // Input Token
-                    TextField(
-                      controller: controller.tokenController,
-                      enabled: !controller.isLoading.value,
-                      textInputAction: TextInputAction.done,
-                      textCapitalization: TextCapitalization.characters,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z0-9]')),
-                      ],
-                      decoration: const InputDecoration(
-                        labelText: 'Token Aktivasi',
-                        hintText: 'Contoh: AK3QH9J2M8VX4Y7BR5C6D1E0F...',
-                        prefixIcon: Icon(Icons.vpn_key_outlined),
-                        border: OutlineInputBorder(),
-                      ),
-                      onSubmitted: (_) => controller.verifyAndStartExam(),
-                    ),
+                    Obx(() => TextField(
+                          controller: controller.tokenController,
+                          enabled: !controller.isLoading.value,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          textCapitalization: TextCapitalization.characters,
+                          keyboardType: TextInputType.text,
+                          textInputAction: TextInputAction.done,
+                          scrollPadding: const EdgeInsets.only(bottom: 120.0, top: 20.0),
+                          inputFormatters: [
+                            UpperCaseTextFormatter(),
+                          ],
+                          decoration: const InputDecoration(
+                            labelText: 'Token Aktivasi',
+                            hintText: 'Contoh: AK3QH9J2M8VX4Y7BR5C6D1E0F...',
+                            prefixIcon: Icon(Icons.vpn_key_outlined),
+                            border: OutlineInputBorder(),
+                          ),
+                          onSubmitted: (_) => controller.verifyAndStartExam(),
+                        )),
 
                     // Box Pesan Error
                     Obx(() {
@@ -137,7 +159,7 @@ class SetupUrlView extends GetView<SetupController> {
                       );
                     }),
 
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 18),
 
                     // Tombol Mulai Ujian
                     Obx(() => ElevatedButton(
@@ -220,6 +242,8 @@ class SetupUrlView extends GetView<SetupController> {
                   ],
                 ),
               ),
+
+              const SizedBox(height: 80),
             ],
           ),
         ),

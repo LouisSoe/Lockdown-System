@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:lockdown_engine/core/constants/api_endpoints.dart';
 import 'package:lockdown_engine/data/models/activation_model.dart';
+import 'package:lockdown_engine/data/models/token_validation_model.dart';
 import 'package:lockdown_engine/data/providers/api_provider.dart';
 
 class ActivationRepository {
@@ -43,6 +44,57 @@ class ActivationRepository {
 
       if (e.response?.statusCode == 422) {
         throw Exception('Data verifikasi tidak valid.');
+      }
+      rethrow;
+    }
+  }
+
+  /// Validasi Token Pelanggaran (violation) atau Token Keluar (exit)
+  /// ke endpoint POST /tokens/validate (alias: POST /activation/validate-token)
+  Future<TokenValidationResponse> validateToken({
+    required String token,
+    required String type, // "violation" atau "exit"
+    String? studentName,
+    String? deviceId,
+    int? examUrlId,
+  }) async {
+    try {
+      final response = await _apiProvider.post(
+        ApiEndpoints.validateToken,
+        data: {
+          'token': token.trim().toUpperCase(),
+          'type': type,
+          if (studentName != null && studentName.isNotEmpty) 'student_name': studentName.trim(),
+          if (deviceId != null && deviceId.isNotEmpty) 'device_id': deviceId.trim(),
+          if (examUrlId != null) 'exam_url_id': examUrlId,
+        },
+      );
+      return TokenValidationResponse.fromJson(response.data as Map<String, dynamic>);
+    } on DioException catch (e) {
+      final responseData = e.response?.data;
+      if (responseData is Map<String, dynamic>) {
+        final errors = responseData['errors'];
+        if (errors is Map) {
+          if (errors['token'] is List && (errors['token'] as List).isNotEmpty) {
+            throw Exception(errors['token'][0].toString());
+          }
+          if (errors['type'] is List && (errors['type'] as List).isNotEmpty) {
+            throw Exception(errors['type'][0].toString());
+          }
+          for (final value in errors.values) {
+            if (value is List && value.isNotEmpty) {
+              throw Exception(value[0].toString());
+            }
+          }
+        }
+        final message = responseData['message'];
+        if (message is String && message.isNotEmpty) {
+          throw Exception(message);
+        }
+      }
+
+      if (e.response?.statusCode == 422) {
+        throw Exception('Token tidak valid atau tidak ditemukan.');
       }
       rethrow;
     }

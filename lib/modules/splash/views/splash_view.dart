@@ -4,7 +4,7 @@ import 'package:get/get.dart';
 import 'package:lockdown_engine/app/routes/app_routes.dart';
 
 class SplashView extends StatefulWidget {
-  const SplashView({Key? key}) : super(key: key);
+  const SplashView({super.key});
 
   @override
   State<SplashView> createState() => _SplashViewState();

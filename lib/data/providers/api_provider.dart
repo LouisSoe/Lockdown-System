@@ -15,6 +15,14 @@ class ApiProvider {
       },
     ));
 
+    // Dynamic Base URL Interceptor: selalu sinkron dengan AppConfig.baseUrl
+    _dio.interceptors.add(InterceptorsWrapper(
+      onRequest: (options, handler) {
+        options.baseUrl = AppConfig.baseUrl;
+        return handler.next(options);
+      },
+    ));
+
     // Add interceptors for logging
     _dio.interceptors.add(LogInterceptor(
       requestBody: true,

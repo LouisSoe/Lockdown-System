@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:lockdown_engine/core/constants/event_types.dart';
@@ -15,6 +16,10 @@ class DisplayMonitorService extends GetxService {
   bool _wasRemoteDesktop = false;
   
   void startMonitoring() async {
+    if (!Platform.isWindows) {
+      print('ℹ Display monitoring skipped on non-Windows platform');
+      return;
+    }
     if (_isMonitoring) return;
     
     _securityLogger = Get.find<SecurityLoggerService>();

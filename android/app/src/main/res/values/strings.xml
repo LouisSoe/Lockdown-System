@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="guard_label">Penjaga Ujian</string>
+    <string name="guard_desc">Mendeteksi aplikasi lain yang dibuka selama ujian dan mengembalikan siswa ke aplikasi ujian. Layanan ini tidak membaca isi layar.</string>
+</resources>

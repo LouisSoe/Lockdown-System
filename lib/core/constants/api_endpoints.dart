@@ -3,10 +3,13 @@ class ApiEndpoints {
   static const String verifyToken = '/activation/verify';
   static const String completeActivation = '/activation/complete';
 
+  // Token validation endpoints (Violation & Exit)
+  static const String validateToken = '/tokens/validate';
+  static const String validateTokenAlias = '/activation/validate-token';
+
   // Exam endpoints
   static const String startExam = '/exam/start';
   static const String finishExam = '/exam/finish';
-  static const String validatePassword = '/exam/validate-password';
 
   // Monitoring endpoints
   static const String uploadEvents = '/monitoring/events';

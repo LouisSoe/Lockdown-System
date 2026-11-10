@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'package:get/get.dart';
 import 'package:lockdown_engine/services/anticheat/security_logger_service.dart';
 import 'package:lockdown_engine/services/anticheat/focus_monitor_service.dart';
@@ -42,8 +43,10 @@ class AntiCheatService extends GetxService {
     securityLogger.startLogging(sessionId);
     screenshotService.setSessionId(sessionId);
     focusMonitor.startMonitoring();
-    processMonitor.startMonitoring();
-    displayMonitor.startMonitoring();
+    if (Platform.isWindows) {
+      processMonitor.startMonitoring();
+      displayMonitor.startMonitoring();
+    }
     
     // Log exam started event
     securityLogger.logEvent(
@@ -75,8 +78,10 @@ class AntiCheatService extends GetxService {
     );
     
     // Stop all monitoring services
-    displayMonitor.stopMonitoring();
-    processMonitor.stopMonitoring();
+    if (Platform.isWindows) {
+      displayMonitor.stopMonitoring();
+      processMonitor.stopMonitoring();
+    }
     focusMonitor.stopMonitoring();
     await securityLogger.stopLogging();
     

@@ -5,6 +5,8 @@ class ActivationModel {
   final String? studentName;
   final String? examName;
   final String? redirectUrl;
+  final int? maxViolations;
+  final bool hasViolationLimit;
   final String expiresAt;
   final int remainingSeconds;
 
@@ -15,6 +17,8 @@ class ActivationModel {
     this.studentName,
     this.examName,
     this.redirectUrl,
+    this.maxViolations,
+    this.hasViolationLimit = true,
     required this.expiresAt,
     required this.remainingSeconds,
   });
@@ -33,6 +37,11 @@ class ActivationModel {
       studentName: data['student_name']?.toString(),
       examName: data['exam_name']?.toString(),
       redirectUrl: data['redirect_url']?.toString(),
+      maxViolations: data['max_violations'] is int
+          ? data['max_violations'] as int
+          : int.tryParse(data['max_violations']?.toString() ?? ''),
+      hasViolationLimit: data['has_violation_limit'] as bool? ??
+          (data['max_violations'] != null),
       expiresAt: data['expires_at']?.toString() ?? '',
       remainingSeconds: int.tryParse(data['remaining_seconds']?.toString() ?? '0') ?? 0,
     );

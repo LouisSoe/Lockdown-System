@@ -1,6 +1,8 @@
 import 'dart:io' show Platform;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:get/get.dart';
+import 'package:lockdown_engine/core/constants/event_types.dart';
+import 'package:lockdown_engine/services/anticheat/security_logger_service.dart';
 
 class WebViewService extends GetxService {
   late InAppWebViewController webViewController;
@@ -57,8 +59,16 @@ class WebViewService extends GetxService {
       builtInZoomControls: false,
       displayZoomControls: false,
 
-      // Cache
+      // Cache & Performance untuk perangkat low-end
       cacheEnabled: true,
+      cacheMode: CacheMode.LOAD_DEFAULT,
+
+      // Android Low-End Rendering & Performance
+      useHybridComposition: true,
+      overScrollMode: OverScrollMode.NEVER,
+      preferredContentMode: UserPreferredContentMode.MOBILE,
+      useWideViewPort: true,
+      loadWithOverviewMode: true,
 
       // Downloads
       useOnDownloadStart: true,
@@ -70,7 +80,7 @@ class WebViewService extends GetxService {
       // Display
       transparentBackground: false,
       verticalScrollBarEnabled: true,
-      horizontalScrollBarEnabled: true,
+      horizontalScrollBarEnabled: false,
 
       // Hardware acceleration
       hardwareAcceleration: true,
@@ -83,6 +93,90 @@ class WebViewService extends GetxService {
     );
   }
   
+  String? allowedBaseUrl;
+  String? allowedHost;
+
+  /// Atur URL dasar ujian yang diizinkan untuk dikunjungi siswa
+  void setAllowedUrl(String url) {
+    allowedBaseUrl = url;
+    try {
+      final uri = Uri.parse(url);
+      allowedHost = uri.host.toLowerCase();
+      print('✓ Allowed exam host configured: $allowedHost');
+    } catch (e) {
+      print('⚠ Error parsing allowed exam URL: $e');
+    }
+  }
+
+  /// Cek apakah URL yang dicoba dibuka diizinkan (domain ujian atau auth)
+  bool isUrlAllowed(WebUri? uri) {
+    if (uri == null) return true;
+    final scheme = uri.scheme.toLowerCase();
+    
+    // Izinkan skema internal
+    if (scheme == 'about' || scheme == 'data' || scheme == 'blob' || scheme == 'javascript') {
+      return true;
+    }
+
+    if (allowedHost == null || allowedHost!.isEmpty) {
+      return true; // Jika belum dikonfigurasi, izinkan
+    }
+
+    final host = uri.host.toLowerCase();
+    if (host.isEmpty) return true;
+
+    // 1. Host sama persis atau subdomain dari host ujian
+    if (host == allowedHost || host.endsWith('.$allowedHost')) {
+      return true;
+    }
+
+    // 2. Daftar domain SSO/OAuth resmi jika login eksternal diperlukan
+    const allowedSsoHosts = [
+      'accounts.google.com',
+      'ssl.gstatic.com',
+      'fonts.googleapis.com',
+      'fonts.gstatic.com',
+      'apis.google.com',
+      'accounts.youtube.com',
+      'gstatic.com',
+    ];
+    for (final sso in allowedSsoHosts) {
+      if (host == sso || host.endsWith('.$sso')) {
+        return true;
+      }
+    }
+
+    // Blokir link luar selain yang diizinkan
+    _notifyBlockedNavigation(uri.toString(), host);
+    return false;
+  }
+
+  void _notifyBlockedNavigation(String url, String host) {
+    print('⛔ Blocked outside navigation attempt: $url');
+
+    try {
+      if (Get.isRegistered<SecurityLoggerService>()) {
+        final logger = Get.find<SecurityLoggerService>();
+        logger.logEvent(
+          type: EventTypes.NAVIGATION_ATTEMPT,
+          data: {
+            'attempted_url': url,
+            'attempted_host': host,
+            'allowed_host': allowedHost,
+            'timestamp': DateTime.now().toIso8601String(),
+          },
+        );
+      }
+    } catch (_) {}
+
+    Get.snackbar(
+      'Akses Dibatasi',
+      'Anda hanya diizinkan mengakses halaman ujian ($allowedHost)',
+      snackPosition: SnackPosition.TOP,
+      duration: const Duration(seconds: 3),
+    );
+  }
+
   // Load start handler
   void handleLoadStart(InAppWebViewController controller, WebUri? url) {
     isLoading.value = true;
@@ -98,6 +192,35 @@ class WebViewService extends GetxService {
     currentUrl.value = url?.toString() ?? '';
     loadProgress.value = 1.0;
     updateNavigationState();
+    _injectAutoScrollOnFocus();
+  }
+
+  /// Inject listener agar form input yang diklik otomatis digulir ke atas keyboard
+  Future<void> _injectAutoScrollOnFocus() async {
+    try {
+      await webViewController.evaluateJavascript(source: '''
+        (function() {
+          if (window.__lockdown_autoscroll_injected) return;
+          window.__lockdown_autoscroll_injected = true;
+
+          window.addEventListener('focusin', function(e) {
+            var target = e.target;
+            if (!target) return;
+            var tagName = (target.tagName || '').toLowerCase();
+            var isInput = tagName === 'input' || tagName === 'textarea' || target.isContentEditable;
+            if (isInput) {
+              setTimeout(function() {
+                try {
+                  target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+                } catch(err) {
+                  target.scrollIntoView(false);
+                }
+              }, 300);
+            }
+          }, true);
+        })();
+      ''');
+    } catch (_) {}
   }
   
   // Progress changed handler
@@ -123,14 +246,11 @@ class WebViewService extends GetxService {
   NavigationActionPolicy shouldOverrideUrlLoading(
     NavigationAction navigationAction,
   ) {
-    final url = navigationAction.request.url?.toString() ?? '';
-    
-    // Log navigation attempt (will integrate with security logger later)
-    print('Navigation attempt: $url');
-    
-    // For now, allow all URLs for flexibility
-    // Later we can add whitelist/blacklist functionality
-    return NavigationActionPolicy.ALLOW;
+    final uri = navigationAction.request.url;
+    if (isUrlAllowed(uri)) {
+      return NavigationActionPolicy.ALLOW;
+    }
+    return NavigationActionPolicy.CANCEL;
   }
   
   // Download handler
@@ -138,7 +258,6 @@ class WebViewService extends GetxService {
     final url = downloadStartRequest.url.toString();
     print('Download blocked: $url');
     
-    // Log download attempt (will integrate with security logger later)
     Get.snackbar(
       'Download Blocked',
       'Downloads are not allowed during exam',
@@ -149,14 +268,17 @@ class WebViewService extends GetxService {
   // Create window handler (popups / SSO Google Login)
   bool handleCreateWindow(CreateWindowAction createWindowAction) {
     final request = createWindowAction.request;
-    final url = request.url?.toString() ?? '';
-    print('Create window request: $url');
+    final uri = request.url;
+    print('Create window request: $uri');
 
-    // Jika window.open dipanggil (misal popup OAuth Google/SSO),
-    // muat URL tersebut langsung di WebView yang sama agar login berjalan mulus
+    // Validasi domain popup terlebih dahulu
+    if (!isUrlAllowed(uri)) {
+      return false; // Tolak pembukaan popup jika ke link eksternal
+    }
+
     if (request.url != null) {
       webViewController.loadUrl(urlRequest: request);
-      return false; // Return false agar WebView tidak mengharapkan windowId terpisah
+      return false;
     }
 
     return false;

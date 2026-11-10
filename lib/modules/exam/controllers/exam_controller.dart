@@ -3,17 +3,18 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:get/get.dart';
+import 'package:lockdown_engine/core/utils/device_info_helper.dart';
+import 'package:lockdown_engine/core/utils/uppercase_text_formatter.dart';
 import 'package:lockdown_engine/services/webview/webview_service.dart';
 import 'package:lockdown_engine/services/webview/javascript_bridge_service.dart';
 import 'package:lockdown_engine/services/lockdown/lockdown_service.dart';
 import 'package:lockdown_engine/services/anticheat/anticheat_service.dart';
-import 'package:lockdown_engine/services/screen_share/screen_share_service.dart';
-import 'package:lockdown_engine/core/utils/device_info_helper.dart';
 import 'package:lockdown_engine/data/repositories/exam_repository.dart';
 import 'package:lockdown_engine/data/models/exam_session_model.dart';
 import 'package:lockdown_engine/data/repositories/activation_repository.dart';
 import 'package:lockdown_engine/modules/activation/controllers/activation_controller.dart';
 import 'package:lockdown_engine/app/routes/app_routes.dart';
+import 'package:lockdown_engine/core/config/app_config.dart';
 
 class ExamController extends GetxController {
   late String examUrl;
@@ -23,28 +24,76 @@ class ExamController extends GetxController {
   late JavaScriptBridgeService jsBridge;
   late LockdownService lockdownService;
   late AntiCheatService antiCheatService;
-  late ScreenShareService screenShareService;
   final examRepo = ExamRepository();
+  final _activationRepo = ActivationRepository();
 
   final remainingTime = '00:00:00'.obs;
   final isExamActive = true.obs;
   Timer? _timer;
   DateTime? _endTime;
 
+  // Strict CBT Policy (Mode Ujian Ketat)
+  final isStrictPolicyEnabled = true.obs;
+  final isLockedOut = false.obs;
+  final isBlocked = false.obs; // true jika pelanggaran melebihi batas maksimal guru
+  final showWarningModal = false.obs;
+  final violationCount = 0.obs;
+  final maxViolations = 2.obs; // Batas pelanggaran dari guru: 1, 2, atau 3 (dinamis)
+  final hasViolationLimit = true.obs; // true: batas aktif; false: batas dinonaktifkan
+  final pinController = TextEditingController();
+  final isUnlocking = false.obs;
+
+  void dismissWarningModal() {
+    showWarningModal.value = false;
+  }
+
   @override
   void onInit() {
     super.onInit();
 
     final args = Get.arguments as Map<String, dynamic>?;
-    examUrl = args?['exam_url'] ?? 'https://example.com';
+    final urlArg = args?['exam_url'] as String?;
+    final savedUrl = ActivationController.getRedirectUrl();
+    final effectiveUrl = (urlArg != null && urlArg.trim().isNotEmpty)
+        ? urlArg.trim()
+        : (savedUrl != null && savedUrl.trim().isNotEmpty ? savedUrl.trim() : '');
+
+    if (effectiveUrl.isEmpty || !effectiveUrl.startsWith('http')) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Get.offAllNamed(AppRoutes.SETUP_URL);
+        Get.snackbar(
+          'Gagal Membuka Ujian',
+          'URL ujian tidak ditemukan atau token belum diverifikasi. Silakan masukkan token aktivasi terlebih dahulu.',
+          snackPosition: SnackPosition.TOP,
+          backgroundColor: Colors.red.shade700,
+          colorText: Colors.white,
+          duration: const Duration(seconds: 5),
+        );
+      });
+      return;
+    }
+
+    examUrl = effectiveUrl;
     session = args?['session'];
+    isStrictPolicyEnabled.value = args?['strict_policy'] ?? true;
+
+    final dynamicMax = args?['max_violations'] ?? ActivationController.getMaxViolations();
+    if (dynamicMax is int) {
+      maxViolations.value = dynamicMax;
+    }
+    final dynamicHasLimit = args?['has_violation_limit'] ?? ActivationController.getHasViolationLimit();
+    if (dynamicHasLimit is bool) {
+      hasViolationLimit.value = dynamicHasLimit;
+    }
 
     // Initialize services
     webViewService = Get.find<WebViewService>();
     jsBridge = Get.find<JavaScriptBridgeService>();
     lockdownService = Get.find<LockdownService>();
     antiCheatService = Get.find<AntiCheatService>();
-    screenShareService = Get.find<ScreenShareService>();
+
+    // Batasi navigasi WebView hanya ke URL / host ujian yang diset guru
+    webViewService.setAllowedUrl(examUrl);
 
     // Register JavaScript handlers
     _registerJavaScriptHandlers();
@@ -57,40 +106,256 @@ class ExamController extends GetxController {
   }
 
   Future<void> _initializeLockdown() async {
+    // 1. Selalu jalankan Anti-Cheat monitoring & listener Strict CBT Policy
     try {
-      // Enable lockdown mode
-      await lockdownService.enableLockdown();
+      final effectiveSessionId = session?.sessionId ??
+          (Get.arguments as Map<String, dynamic>?)?['session_id'] ??
+          ActivationController.getSessionId() ??
+          'exam-session';
+      await antiCheatService.startMonitoring(effectiveSessionId);
+      _setupStrictPolicyListener();
+      print('✓ Anti-cheat monitoring and Strict CBT Policy active');
+    } catch (e) {
+      print('✗ Anti-cheat monitoring error: $e');
+    }
 
-      // Start anti-cheat monitoring
-      if (session != null) {
-        await antiCheatService.startMonitoring(session!.sessionId);
-      }
+    // 2. Jalankan Native Lockdown (Fullscreen, Kiosk/LockTask, dsb)
+    try {
+      final effectiveSessionId = session?.sessionId ??
+          (Get.arguments as Map<String, dynamic>?)?['session_id']?.toString() ??
+          ActivationController.getSessionId()?.toString() ??
+          'exam-session';
+      final studentName = (Get.arguments as Map<String, dynamic>?)?['student_name']?.toString() ??
+          ActivationController.getStudentName() ??
+          'STD-001';
+      final token = ActivationController.getSavedToken() ?? '';
 
-      // Start screen share
-      await _startScreenShare();
-
-      print('✓ Lockdown, monitoring, and screen share initialized');
+      await lockdownService.enableLockdown(
+        apiBase: AppConfig.baseUrl,
+        token: token,
+        examId: effectiveSessionId,
+        studentId: studentName,
+        maxViolations: maxViolations.value,
+        hasViolationLimit: hasViolationLimit.value,
+      );
+      print('✓ Native lockdown initialized');
     } catch (e) {
       print('✗ Lockdown initialization error: $e');
-      Get.snackbar(
-        'Warning',
-        'Some security features may not be active',
-        snackPosition: SnackPosition.TOP,
-      );
     }
   }
 
-  Future<void> _startScreenShare() async {
+  void _setupStrictPolicyListener() {
+    if (!isStrictPolicyEnabled.value) return;
+
+    final focusMonitor = antiCheatService.focusMonitor;
+
+    // 1. Trigger dari siklus hidup Flutter (WidgetsBindingObserver)
+    focusMonitor.onFocusRegained = (count) {
+      _handleViolation(count);
+    };
+
+    // 2. Trigger langsung dari Native Android (Status bar swipe / Home button / Recent apps)
+    lockdownService.onSecurityViolation = (reason) {
+      if (!isStrictPolicyEnabled.value || !isExamActive.value) return;
+      focusMonitor.recordViolation(reason: reason);
+      _handleViolation(focusMonitor.focusLossCount);
+    };
+
+    // 3. Sinkronisasi langsung dua arah dari KioskController (Native Kotlin)
+    final kiosk = lockdownService.kioskController;
+    kiosk.addListener(() {
+      if (!isExamActive.value) return;
+      final s = kiosk.status;
+      if (s.violations != violationCount.value) {
+        antiCheatService.focusMonitor.setFocusLossCount(s.violations);
+        _handleViolation(s.violations);
+      }
+      if (hasViolationLimit.value) {
+        if (s.isBlocked && !isBlocked.value) {
+          showWarningModal.value = false;
+          isLockedOut.value = true;
+          isBlocked.value = true;
+        } else if (s.isLockedOut && !isLockedOut.value && !isBlocked.value) {
+          showWarningModal.value = false;
+          isLockedOut.value = true;
+        } else if (!s.isLockedOut && !s.isBlocked && isLockedOut.value) {
+          showWarningModal.value = false;
+          isLockedOut.value = false;
+        }
+      }
+    });
+  }
+
+  void _handleViolation(int count) {
+    if (!isStrictPolicyEnabled.value || !isExamActive.value) return;
+    if (isBlocked.value) return;
+
+    violationCount.value = count;
+
+    if (hasViolationLimit.value) {
+      if (count > maxViolations.value) {
+        // Pelanggaran melebihi batas maksimal -> LANGSUNG DIBLOCK / TIDAK BISA MELANJUTKAN UJIAN
+        showWarningModal.value = false;
+        isLockedOut.value = true;
+        isBlocked.value = true;
+      } else {
+        // Setiap kali pelanggaran (1, 2, dst <= max) -> WAJIB ISI TOKEN PELANGGARAN
+        showWarningModal.value = false;
+        isLockedOut.value = true;
+      }
+    } else {
+      // Guru menonaktifkan pembatasan -> hanya peringatan biasa tanpa kunci token
+      showWarningModal.value = true;
+    }
+  }
+
+  /// Verifikasi Token Pelanggaran (Violation Token) ke endpoint POST /tokens/validate
+  Future<bool> verifyViolationUnlockCode(String code) async {
+    final cleanCode = code.trim().toUpperCase();
+    if (cleanCode.isEmpty) return false;
+
+    // Validasi via endpoint POST /tokens/validate (type: "violation")
     try {
-      final sessionId = session?.sessionId ?? 'no-session';
+      final studentName = ActivationController.getStudentName();
       final deviceId = await DeviceInfoHelper.getDeviceId();
-      await screenShareService.startSharing(
-        sessionId: sessionId,
+
+      final result = await _activationRepo.validateToken(
+        token: cleanCode,
+        type: 'violation',
+        studentName: studentName,
         deviceId: deviceId,
       );
+
+      final isValid = result.success && (result.data?.valid ?? false);
+      if (!isValid) {
+        final message = result.message.isNotEmpty
+            ? result.message
+            : 'Token pelanggaran tidak valid atau sudah kedaluwarsa.';
+        Get.snackbar(
+          'Token Salah',
+          message,
+          backgroundColor: Colors.red.shade700,
+          colorText: Colors.white,
+          snackPosition: SnackPosition.TOP,
+          margin: const EdgeInsets.all(12),
+          borderRadius: 8,
+          icon: const Icon(Icons.error_outline, color: Colors.white),
+          duration: const Duration(seconds: 4),
+        );
+      }
+      return isValid;
     } catch (e) {
-      // Screen share gagal tidak boleh block exam — log saja
-      print('[ExamController] Screen share start error: $e');
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      Get.snackbar(
+        'Token Salah',
+        msg,
+        backgroundColor: Colors.red.shade700,
+        colorText: Colors.white,
+        snackPosition: SnackPosition.TOP,
+        margin: const EdgeInsets.all(12),
+        borderRadius: 8,
+        icon: const Icon(Icons.error_outline, color: Colors.white),
+        duration: const Duration(seconds: 4),
+      );
+      return false;
+    }
+  }
+
+  /// Buka kunci ujian setelah terkunci (memerlukan Token Pelanggaran dari guru)
+  Future<bool> unlockBySupervisor(String pin) async {
+    if (isBlocked.value) {
+      Get.snackbar(
+        'Ujian Diblokir',
+        'Ujian telah diblokir permanen karena melebihi batas toleransi pelanggaran. Anda tidak dapat melanjutkan ujian.',
+        backgroundColor: Colors.red.shade700,
+        colorText: Colors.white,
+        snackPosition: SnackPosition.TOP,
+        margin: const EdgeInsets.all(12),
+        borderRadius: 8,
+        icon: const Icon(Icons.block_rounded, color: Colors.white),
+      );
+      return false;
+    }
+
+    final cleanPin = pin.trim().toUpperCase();
+    if (cleanPin.isEmpty) {
+      Get.snackbar(
+        'Input Kosong',
+        'Harap masukkan Token Pelanggaran dari guru',
+        snackPosition: SnackPosition.TOP,
+        backgroundColor: Colors.orange.shade800,
+        colorText: Colors.white,
+        margin: const EdgeInsets.all(12),
+        borderRadius: 8,
+        icon: const Icon(Icons.warning_amber_rounded, color: Colors.white),
+      );
+      return false;
+    }
+
+    isUnlocking.value = true;
+    try {
+      final isValid = await verifyViolationUnlockCode(cleanPin);
+
+      if (isValid) {
+        // Berikan masa tenggang di focus monitor agar dialog sematkan layar dari sistem Android tidak memicu pelanggaran baru
+        antiCheatService.focusMonitor.extendGracePeriod(seconds: 8);
+
+        // Buka kunci di sisi native Kotlin & sinkronkan status
+        await lockdownService.kioskController.unlockExam(cleanPin);
+
+        isLockedOut.value = false;
+        showWarningModal.value = false;
+        pinController.clear();
+
+        // PENTING: Nilai violationCount tetap dipertahankan kumulatif
+        // agar pelanggaran berikutnya dihitung secara benar.
+
+        // Minta sematkan layar kembali
+        await lockdownService.kioskController.requestPin();
+
+        Get.snackbar(
+          'Ujian Dibuka Kembali',
+          'Token valid. Kunci lembar ujian telah dibuka. Silakan lanjutkan pengerjaan.',
+          backgroundColor: Colors.green.shade700,
+          colorText: Colors.white,
+          snackPosition: SnackPosition.TOP,
+          margin: const EdgeInsets.all(12),
+          borderRadius: 8,
+          icon: const Icon(Icons.check_circle_outline, color: Colors.white),
+          duration: const Duration(seconds: 4),
+        );
+        return true;
+      } else {
+        if (!Get.isSnackbarOpen) {
+          Get.snackbar(
+            'Token Salah',
+            'Token Pelanggaran yang Anda masukkan tidak valid atau sudah kedaluwarsa.',
+            backgroundColor: Colors.red.shade700,
+            colorText: Colors.white,
+            snackPosition: SnackPosition.TOP,
+            margin: const EdgeInsets.all(12),
+            borderRadius: 8,
+            icon: const Icon(Icons.error_outline, color: Colors.white),
+            duration: const Duration(seconds: 4),
+          );
+        }
+        return false;
+      }
+    } catch (e) {
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      Get.snackbar(
+        'Token Salah',
+        'Gagal memverifikasi token pelanggaran: $msg',
+        snackPosition: SnackPosition.TOP,
+        backgroundColor: Colors.red.shade700,
+        colorText: Colors.white,
+        margin: const EdgeInsets.all(12),
+        borderRadius: 8,
+        icon: const Icon(Icons.error_outline, color: Colors.white),
+      );
+      return false;
+    } finally {
+      isUnlocking.value = false;
     }
   }
 
@@ -183,27 +448,38 @@ class ExamController extends GetxController {
         ),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 360),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Masukkan password pengawas untuk mengakhiri ujian:',
-                style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: passwordController,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'Password Pengawas',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.lock_outline),
-                  isDense: true,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Masukkan Token Keluar (Exit Token) 6 digit dari guru untuk mengakhiri ujian:',
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
                 ),
-                onSubmitted: (value) => _validatePassword(value),
-              ),
-            ],
+                const SizedBox(height: 16),
+                TextField(
+                  controller: passwordController,
+                  textCapitalization: TextCapitalization.characters,
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  keyboardType: TextInputType.text,
+                  scrollPadding: const EdgeInsets.only(bottom: 80.0, top: 20.0),
+                  inputFormatters: [
+                    UpperCaseTextFormatter(),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Token Keluar (Exit Token)',
+                    hintText: 'Contoh: XY89ZW',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.vpn_key_rounded),
+                    isDense: true,
+                  ),
+                  onSubmitted: (value) => _validatePassword(value),
+                ),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -219,7 +495,7 @@ class ExamController extends GetxController {
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
             onPressed: () => _validatePassword(passwordController.text),
-            child: const Text('Keluar'),
+            child: const Text('Buka Kunci & Keluar'),
           ),
         ],
       ),
@@ -227,7 +503,13 @@ class ExamController extends GetxController {
       transitionDuration: const Duration(milliseconds: 150),
       transitionCurve: Curves.easeOutCubic,
     );
-    passwordController.dispose();
+
+    // Beri jeda aman sebelum dispose controller agar animasi dialog selesai seutuhnya
+    Future.delayed(const Duration(milliseconds: 300), () {
+      try {
+        passwordController.dispose();
+      } catch (_) {}
+    });
   }
 
   Future<void> showForceCloseConfirmationDialog() async {
@@ -273,7 +555,6 @@ class ExamController extends GetxController {
   Future<void> forceCloseApp() async {
     try {
       await webViewService.disposeWebView();
-      await screenShareService.stopSharing();
       await antiCheatService.stopMonitoring();
       await lockdownService.disableLockdown();
     } catch (_) {}
@@ -281,42 +562,70 @@ class ExamController extends GetxController {
   }
 
   Future<void> _validatePassword(String password) async {
-    if (password.isEmpty) {
-      Get.snackbar('Error', 'Please enter password');
+    final cleanToken = password.trim().toUpperCase();
+    if (cleanToken.isEmpty) {
+      Get.snackbar(
+        'Input Kosong',
+        'Harap masukkan Token Keluar dari guru',
+        snackPosition: SnackPosition.TOP,
+        backgroundColor: Colors.orange.shade800,
+        colorText: Colors.white,
+        margin: const EdgeInsets.all(12),
+        borderRadius: 8,
+        icon: const Icon(Icons.warning_amber_rounded, color: Colors.white),
+      );
       return;
     }
 
     try {
-      // Master dummy password for debugging/testing
-      if (password == '123456') {
-        Get.back();
-        finishExam('forced_exit');
-        return;
-      }
+      final studentName = ActivationController.getStudentName();
+      final deviceId = await DeviceInfoHelper.getDeviceId();
 
-      if (session != null) {
-        final result = await examRepo.validateExitPassword(
-          session!.sessionId,
-          password,
-        );
+      final result = await _activationRepo.validateToken(
+        token: cleanToken,
+        type: 'exit',
+        studentName: studentName,
+        deviceId: deviceId,
+      );
+      final isValid = result.success && (result.data?.valid ?? false);
 
-        if (result.isValid) {
+      if (isValid) {
+        // Tutup keyboard dan tunggu animasi dialog selesai agar tidak memicu assertion '_dependents.isEmpty'
+        FocusManager.instance.primaryFocus?.unfocus();
+        if (Get.isDialogOpen ?? false) {
           Get.back();
-          finishExam('forced_exit');
-        } else {
-          Get.snackbar('Error', 'Invalid password');
         }
+        await Future.delayed(const Duration(milliseconds: 150));
+        await finishExam('exit_token');
       } else {
-        // Testing mode without session
-        if (password == 'admin') {
-          Get.back();
-          finishExam('forced_exit');
-        } else {
-          Get.snackbar('Error', 'Invalid password');
-        }
+        final message = result.message.isNotEmpty
+            ? result.message
+            : 'Token keluar tidak valid atau tidak ditemukan.';
+        Get.snackbar(
+          'Token Salah',
+          message,
+          snackPosition: SnackPosition.TOP,
+          backgroundColor: Colors.red.shade700,
+          colorText: Colors.white,
+          margin: const EdgeInsets.all(12),
+          borderRadius: 8,
+          icon: const Icon(Icons.error_outline, color: Colors.white),
+          duration: const Duration(seconds: 4),
+        );
       }
     } catch (e) {
-      Get.snackbar('Error', 'Failed to validate password: $e');
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      Get.snackbar(
+        'Token Salah',
+        msg,
+        snackPosition: SnackPosition.TOP,
+        backgroundColor: Colors.red.shade700,
+        colorText: Colors.white,
+        margin: const EdgeInsets.all(12),
+        borderRadius: 8,
+        icon: const Icon(Icons.error_outline, color: Colors.white),
+        duration: const Duration(seconds: 4),
+      );
     }
   }
 
@@ -325,6 +634,13 @@ class ExamController extends GetxController {
 
     isExamActive.value = false;
     _timer?.cancel();
+
+    // Pastikan keyboard dan dialog apa pun sudah tertutup dengan aman
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (Get.isDialogOpen ?? false) {
+      Get.back();
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
 
     try {
       // 1. Selesaikan semua request network & data terlebih dahulu selagi layar aktif
@@ -350,9 +666,6 @@ class ExamController extends GetxController {
       }
 
       // 2. Hentikan background monitoring & release WebView
-      try {
-        await screenShareService.stopSharing();
-      } catch (_) {}
       try {
         await antiCheatService.stopMonitoring();
       } catch (_) {}
@@ -382,6 +695,12 @@ class ExamController extends GetxController {
   @override
   void onClose() {
     _timer?.cancel();
+    try {
+      pinController.dispose();
+    } catch (_) {}
+    try {
+      lockdownService.onSecurityViolation = null;
+    } catch (_) {}
     super.onClose();
   }
 }
